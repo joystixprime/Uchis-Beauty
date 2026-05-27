@@ -1,15 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Calendar, ShoppingBag, Home as HomeIcon, User, Star, Clock, MapPin, Plus, Minus, X, ChevronRight, Check, Lock, LogOut, TrendingUp, Package, Edit3, Trash2, Scissors, ArrowLeft, Bell, Upload, Image as ImageIcon, Settings as SettingsIcon, DollarSign, FileText, Briefcase, ClipboardList, Download, History, ArrowRight, Truck, BadgeCheck, Wallet, PieChart, Users as UsersIcon, MessageCircle, Send } from 'lucide-react';
-
-// localStorage-backed storage shim
-if (typeof window !== 'undefined' && !window.storage) {
-  window.storage = {
-    get: async (key) => { const v = localStorage.getItem(key); return v === null ? null : { key, value: v }; },
-    set: async (key, value) => { localStorage.setItem(key, value); return { key, value }; },
-    delete: async (key) => { localStorage.removeItem(key); return { key, deleted: true }; },
-    list: async (prefix = '') => { const keys = []; for (let i=0;i<localStorage.length;i++){const k=localStorage.key(i); if(k&&k.startsWith(prefix))keys.push(k);} return { keys, prefix }; },
-  };
-}
+import { supabase } from './lib/supabase';
 
 const n = (v) => (Number(v) || 0).toLocaleString('en-NG');
 const ORDER_STAGES = ['new', 'confirmed', 'processing', 'ready', 'completed'];
@@ -19,10 +10,58 @@ const STAGE_COLOR = {
   processing: 'bg-indigo-100 text-indigo-700', ready: 'bg-teal-100 text-teal-700',
   completed: 'bg-green-100 text-green-700', cancelled: 'bg-red-100 text-red-700',
 };
+const defaultSettings = { depositPercent: 50, cancellationFeePercent: 20, peakEnabled: true, peakDays: ['FR','SA','SU'], peakPricingMultiplier: 1.25 };
+
+// ── Supabase app_data helpers (single source of truth) ──────────────────────
+const sbGet = async (key, fallback) => {
+  try {
+    const { data } = await supabase.from('app_data').select('value').eq('key', key).maybeSingle();
+    return data?.value ?? fallback;
+  } catch { return fallback; }
+};
+const sbSet = async (key, value) => {
+  try {
+    await supabase.from('app_data').upsert({ key, value }, { onConflict: 'key' });
+  } catch (e) { console.error(`sbSet(${key}):`, e); }
+};
+
+const DEFAULT_SERVICES = [
+  { id: 's1', category: 'Hair', name: 'Box Braids', duration: 240, price: 25000, desc: 'Classic box braids, any length', popular: true },
+  { id: 's2', category: 'Hair', name: 'Knotless Braids', duration: 300, price: 35000, desc: 'Lightweight, no tension knotless style', popular: true },
+  { id: 's3', category: 'Hair', name: 'Cornrows', duration: 120, price: 10000, desc: 'Straight-back or freestyle patterns' },
+  { id: 's4', category: 'Hair', name: 'Hair Wash & Style', duration: 75, price: 8000, desc: 'Deep cleanse & professional styling' },
+  { id: 's5', category: 'Nails', name: 'Classic Manicure', duration: 45, price: 5000, desc: 'Shape, cuticle care & polish' },
+  { id: 's6', category: 'Nails', name: 'Gel Manicure', duration: 60, price: 8000, desc: 'Long-lasting gel finish' },
+  { id: 's7', category: 'Nails', name: 'Acrylic Full Set', duration: 90, price: 12000, desc: 'Full set with shape of choice', popular: true },
+  { id: 's8', category: 'Feet', name: 'Classic Pedicure', duration: 60, price: 7000, desc: 'Foot soak, scrub & polish' },
+  { id: 's9', category: 'Feet', name: 'Luxury Spa Pedicure', duration: 90, price: 11000, desc: 'Hot stones, mask & massage', popular: true },
+  { id: 's10', category: 'Packages', name: 'Full Glow Package', duration: 360, price: 45000, desc: 'Hair + mani + pedi combo' },
+];
+const DEFAULT_PRODUCTS = [
+  { id: 'p1', name: 'Pre-Stretched Braiding Hair 26"', price: 3500, cost: 1600, stock: 120, category: 'Hair Extensions', emoji: '💇🏾‍♀️' },
+  { id: 'p2', name: 'Human Hair Bundle 20"', price: 25000, cost: 14000, stock: 25, category: 'Hair Extensions', emoji: '✨' },
+  { id: 'p3', name: 'Edge Control Gel', price: 2500, cost: 1100, stock: 7, category: 'Styling', emoji: '💆🏾‍♀️' },
+  { id: 'p4', name: 'Shine n Jam', price: 2000, cost: 900, stock: 60, category: 'Styling', emoji: '💫' },
+  { id: 'p5', name: 'Gel Polish Set (12 colours)', price: 6000, cost: 3200, stock: 30, category: 'Nails', emoji: '💅' },
+  { id: 'p6', name: 'Cuticle Oil Treatment', price: 1500, cost: 600, stock: 4, category: 'Nails', emoji: '🫧' },
+];
+const DEFAULT_STAFF = [
+  { id: 'st1', name: 'Uchenna', role: 'Owner & Lead Stylist', specialty: 'Hair', rating: 4.9, initial: 'U' },
+  { id: 'st2', name: 'Chiamaka', role: 'Senior Nail Tech', specialty: 'Nails', rating: 4.8, initial: 'C' },
+  { id: 'st3', name: 'Blessing', role: 'Braider', specialty: 'Hair', rating: 5.0, initial: 'B' },
+  { id: 'st4', name: 'Any professional', role: 'First available', specialty: 'Any', rating: 4.9, initial: '✨' },
+];
+const DEFAULT_ANNOUNCEMENTS = [
+  { id: 'a1', title: 'New summer braids in stock! 🌴', body: 'Fresh colours just arrived — book early for the weekend.', audience: 'customer', active: true, createdAt: new Date().toISOString() },
+];
+const DEFAULT_MESSAGES = [
+  { id: 'm1', from: 'support', text: 'Hi! 👋 Welcome to Uchis Beauty Salon. How can we help you today?', at: new Date().toISOString(), read: false },
+];
 
 export default function UchisApp() {
   const [view, setView] = useState('home');
-  const [role, setRole] = useState(null); // null=customer, 'manager', 'accountant'
+  const [role, setRole] = useState(null);
+  const [authUser, setAuthUser] = useState(null);
   const [selectedServices, setSelectedServices] = useState([]);
   const [cart, setCart] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -35,70 +74,104 @@ export default function UchisApp() {
   const [priceLog, setPriceLog] = useState([]);
   const [announcements, setAnnouncements] = useState([]);
   const [messages, setMessages] = useState([]);
-  const [settings, setSettings] = useState({ depositPercent: 50, cancellationFeePercent: 20, peakEnabled: true, peakDays: ['FR','SA','SU'] });
+  const [settings, setSettings] = useState(defaultSettings);
 
-  const defaultServices = [
-    { id: 's1', category: 'Hair', name: 'Box Braids', duration: 240, price: 25000, desc: 'Classic box braids, any length', popular: true },
-    { id: 's2', category: 'Hair', name: 'Knotless Braids', duration: 300, price: 35000, desc: 'Lightweight, no tension knotless style', popular: true },
-    { id: 's3', category: 'Hair', name: 'Cornrows', duration: 120, price: 10000, desc: 'Straight-back or freestyle patterns' },
-    { id: 's4', category: 'Hair', name: 'Hair Wash & Style', duration: 75, price: 8000, desc: 'Deep cleanse & professional styling' },
-    { id: 's5', category: 'Nails', name: 'Classic Manicure', duration: 45, price: 5000, desc: 'Shape, cuticle care & polish' },
-    { id: 's6', category: 'Nails', name: 'Gel Manicure', duration: 60, price: 8000, desc: 'Long-lasting gel finish' },
-    { id: 's7', category: 'Nails', name: 'Acrylic Full Set', duration: 90, price: 12000, desc: 'Full set with shape of choice', popular: true },
-    { id: 's8', category: 'Feet', name: 'Classic Pedicure', duration: 60, price: 7000, desc: 'Foot soak, scrub & polish' },
-    { id: 's9', category: 'Feet', name: 'Luxury Spa Pedicure', duration: 90, price: 11000, desc: 'Hot stones, mask & massage', popular: true },
-    { id: 's10', category: 'Packages', name: 'Full Glow Package', duration: 360, price: 45000, desc: 'Hair + mani + pedi combo' },
-  ];
-  const defaultProducts = [
-    { id: 'p1', name: 'Pre-Stretched Braiding Hair 26"', price: 3500, cost: 1600, stock: 120, category: 'Hair Extensions', emoji: '💇🏾‍♀️' },
-    { id: 'p2', name: 'Human Hair Bundle 20"', price: 25000, cost: 14000, stock: 25, category: 'Hair Extensions', emoji: '✨' },
-    { id: 'p3', name: 'Edge Control Gel', price: 2500, cost: 1100, stock: 7, category: 'Styling', emoji: '💆🏾‍♀️' },
-    { id: 'p4', name: 'Shine n Jam', price: 2000, cost: 900, stock: 60, category: 'Styling', emoji: '💫' },
-    { id: 'p5', name: 'Gel Polish Set (12 colours)', price: 6000, cost: 3200, stock: 30, category: 'Nails', emoji: '💅' },
-    { id: 'p6', name: 'Cuticle Oil Treatment', price: 1500, cost: 600, stock: 4, category: 'Nails', emoji: '🫧' },
-  ];
-  const defaultStaff = [
-    { id: 'st1', name: 'Uchenna', role: 'Owner & Lead Stylist', specialty: 'Hair', rating: 4.9, initial: 'U' },
-    { id: 'st2', name: 'Chiamaka', role: 'Senior Nail Tech', specialty: 'Nails', rating: 4.8, initial: 'C' },
-    { id: 'st3', name: 'Blessing', role: 'Braider', specialty: 'Hair', rating: 5.0, initial: 'B' },
-    { id: 'st4', name: 'Any professional', role: 'First available', specialty: 'Any', rating: 4.9, initial: '✨' },
-  ];
-
+  // ── Boot: load everything from Supabase ────────────────────────────────────
   useEffect(() => {
     (async () => {
       try {
-        const g = async (k, d) => { const r = await window.storage.get(k).catch(() => null); return r ? JSON.parse(r.value) : d; };
-        setServices(await g('uchiR:services', defaultServices));
-        setProducts(await g('uchiR:products', defaultProducts));
-        setBookings(await g('uchiR:bookings', []));
-        setOrders(await g('uchiR:orders', []));
-        setStaff(await g('uchiR:staff', defaultStaff));
-        setPriceLog(await g('uchiR:priceLog', []));
-        setAnnouncements(await g('uchiR:announcements', [
-          { id: 'a1', title: 'New summer braids in stock! 🌴', body: 'Fresh colours just arrived — book early for the weekend.', audience: 'customer', active: true, createdAt: new Date().toISOString() },
-        ]));
-        setMessages(await g('uchiR:messages', [
-          { id: 'm1', from: 'support', text: 'Hi! 👋 Welcome to Uchis Beauty Salon. How can we help you today?', at: new Date().toISOString() },
-        ]));
-        const cfg = await g('uchiR:settings', null); if (cfg) setSettings(cfg);
-      } catch { setServices(defaultServices); setProducts(defaultProducts); setStaff(defaultStaff); }
-      setLoading(false);
+        // 1. Restore auth session
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          setAuthUser(session.user);
+          const { data: prof } = await supabase.from('profiles').select('role').eq('id', session.user.id).maybeSingle();
+          if (prof?.role) setRole(prof.role);
+        }
+
+        // 2. Load all app data in parallel
+        const [svcs, prods, bkgs, ords, stf, anns, msgs, plg, cfg] = await Promise.all([
+          sbGet('services',      DEFAULT_SERVICES),
+          sbGet('products',      DEFAULT_PRODUCTS),
+          sbGet('bookings',      []),
+          sbGet('orders',        []),
+          sbGet('staff',         DEFAULT_STAFF),
+          sbGet('announcements', DEFAULT_ANNOUNCEMENTS),
+          sbGet('messages',      DEFAULT_MESSAGES),
+          sbGet('priceLog',      []),
+          sbGet('settings',      null),
+        ]);
+
+        setServices(Array.isArray(svcs) && svcs.length ? svcs : DEFAULT_SERVICES);
+        setProducts(Array.isArray(prods) && prods.length ? prods : DEFAULT_PRODUCTS);
+        setBookings(Array.isArray(bkgs) ? bkgs : []);
+        setOrders(Array.isArray(ords) ? ords : []);
+        setStaff(Array.isArray(stf) && stf.length ? stf : DEFAULT_STAFF);
+        setAnnouncements(Array.isArray(anns) ? anns : DEFAULT_ANNOUNCEMENTS);
+        setMessages(Array.isArray(msgs) && msgs.length ? msgs : DEFAULT_MESSAGES);
+        setPriceLog(Array.isArray(plg) ? plg : []);
+        if (cfg && typeof cfg === 'object') {
+          setSettings({
+            ...defaultSettings, ...cfg,
+            peakDays: Array.isArray(cfg.peakDays)
+              ? cfg.peakDays
+              : String(cfg.peakDays || '').split(',').map(x => x.trim()).filter(Boolean),
+          });
+        }
+
+        // 3. First-run seed: write defaults to DB if services key is missing
+        const { data: exists } = await supabase.from('app_data').select('key').eq('key', 'services').maybeSingle();
+        if (!exists) {
+          await Promise.all([
+            sbSet('services', DEFAULT_SERVICES), sbSet('products', DEFAULT_PRODUCTS),
+            sbSet('staff', DEFAULT_STAFF), sbSet('announcements', DEFAULT_ANNOUNCEMENTS),
+            sbSet('messages', DEFAULT_MESSAGES), sbSet('bookings', []),
+            sbSet('orders', []), sbSet('priceLog', []), sbSet('settings', defaultSettings),
+          ]);
+        }
+      } catch (err) {
+        console.error('Boot load error:', err);
+      } finally {
+        setLoading(false);
+      }
     })();
   }, []);
 
+  // ── Auth state listener ────────────────────────────────────────────────────
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        setAuthUser(session.user);
+        const { data: prof } = await supabase.from('profiles').select('role').eq('id', session.user.id).maybeSingle();
+        if (prof?.role) setRole(prof.role);
+      }
+      if (event === 'SIGNED_OUT') { setAuthUser(null); setRole(null); }
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // ── Save functions — single write to Supabase ──────────────────────────────
   const save = {
-    services: async (d) => { setServices(d); try { await window.storage.set('uchiR:services', JSON.stringify(d)); } catch {} },
-    products: async (d) => { setProducts(d); try { await window.storage.set('uchiR:products', JSON.stringify(d)); } catch {} },
-    bookings: async (d) => { setBookings(d); try { await window.storage.set('uchiR:bookings', JSON.stringify(d)); } catch {} },
-    orders: async (d) => { setOrders(d); try { await window.storage.set('uchiR:orders', JSON.stringify(d)); } catch {} },
-    staff: async (d) => { setStaff(d); try { await window.storage.set('uchiR:staff', JSON.stringify(d)); } catch {} },
-    priceLog: async (d) => { setPriceLog(d); try { await window.storage.set('uchiR:priceLog', JSON.stringify(d)); } catch {} },
-    announcements: async (d) => { setAnnouncements(d); try { await window.storage.set('uchiR:announcements', JSON.stringify(d)); } catch {} },
-    messages: async (d) => { setMessages(d); try { await window.storage.set('uchiR:messages', JSON.stringify(d)); } catch {} },
-    settings: async (d) => { setSettings(d); try { await window.storage.set('uchiR:settings', JSON.stringify(d)); } catch {} },
+    services:      async (d) => { setServices(d);       await sbSet('services', d); },
+    products:      async (d) => { setProducts(d);       await sbSet('products', d); },
+    bookings:      async (d) => { setBookings(d);       await sbSet('bookings', d); },
+    orders:        async (d) => { setOrders(d);         await sbSet('orders', d); },
+    staff:         async (d) => { setStaff(d);          await sbSet('staff', d); },
+    priceLog:      async (d) => { setPriceLog(d);       await sbSet('priceLog', d); },
+    announcements: async (d) => { setAnnouncements(d);  await sbSet('announcements', d); },
+    messages:      async (d) => { setMessages(d);       await sbSet('messages', d); },
+    settings:      async (d) => { setSettings(d);       await sbSet('settings', d); },
   };
 
-  if (loading) return <div className="min-h-screen bg-white flex items-center justify-center"><div className="text-3xl italic" style={{ fontFamily: "'Fraunces', serif" }}>Uchis</div></div>;
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setRole(null); setAuthUser(null); setView('home');
+  };
+
+  if (loading) return (
+    <div className="min-h-screen bg-white flex items-center justify-center">
+      <div className="text-3xl italic" style={{ fontFamily: "'Fraunces', serif" }}>Uchis</div>
+    </div>
+  );
 
   const fontStyle = { fontFamily: "'Inter', system-ui, sans-serif" };
   const styleBlock = (
@@ -114,25 +187,34 @@ export default function UchisApp() {
     `}</style>
   );
 
-  // ROLE LOGIN
+  // STAFF LOGIN GATE
   if (view === 'staff-gate') {
-    return <div className="min-h-screen bg-neutral-50" style={fontStyle}>{styleBlock}<RoleLogin setRole={setRole} setView={setView} /></div>;
+    return (
+      <div className="min-h-screen bg-neutral-50" style={fontStyle}>{styleBlock}
+        <StaffLogin
+          currentUser={authUser} currentRole={role}
+          onLogin={(r) => { setRole(r); setView('home'); }}
+          onBack={() => setView('home')}
+          onSignOut={handleSignOut}
+        />
+      </div>
+    );
   }
 
-  // OWNER / MANAGER / ACCOUNTANT PORTALS
+  // STAFF PORTALS
   if (role === 'owner') {
     return <div className="min-h-screen bg-neutral-50" style={fontStyle}>{styleBlock}
-      <OwnerPortal services={services} products={products} bookings={bookings} orders={orders} staff={staff} settings={settings} priceLog={priceLog} announcements={announcements} messages={messages} save={save} exit={() => { setRole(null); setView('home'); }} />
+      <OwnerPortal services={services} products={products} bookings={bookings} orders={orders} staff={staff} settings={settings} priceLog={priceLog} announcements={announcements} messages={messages} save={save} exit={() => { setRole(null); setView('home'); }} onSignOut={handleSignOut} />
     </div>;
   }
   if (role === 'manager') {
     return <div className="min-h-screen bg-neutral-50" style={fontStyle}>{styleBlock}
-      <ManagerPortal services={services} products={products} bookings={bookings} orders={orders} staff={staff} priceLog={priceLog} announcements={announcements} messages={messages} save={save} exit={() => { setRole(null); setView('home'); }} />
+      <ManagerPortal services={services} products={products} bookings={bookings} orders={orders} staff={staff} priceLog={priceLog} announcements={announcements} messages={messages} save={save} exit={() => { setRole(null); setView('home'); }} onSignOut={handleSignOut} />
     </div>;
   }
   if (role === 'accountant') {
     return <div className="min-h-screen bg-neutral-50" style={fontStyle}>{styleBlock}
-      <AccountantPortal products={products} bookings={bookings} orders={orders} services={services} settings={settings} exit={() => { setRole(null); setView('home'); }} />
+      <AccountantPortal products={products} bookings={bookings} orders={orders} services={services} settings={settings} exit={() => { setRole(null); setView('home'); }} onSignOut={handleSignOut} />
     </div>;
   }
 
@@ -168,7 +250,6 @@ export default function UchisApp() {
           </div></div>
         )}
 
-        {/* Floating customer-service chat button */}
         {!['chat', 'checkout-booking', 'checkout-shop'].includes(view) && selectedServices.length === 0 && (
           <div className="fixed bottom-0 left-0 right-0 z-30 pointer-events-none"><div className="max-w-md mx-auto relative">
             <button onClick={() => setView('chat')} className="pointer-events-auto absolute right-4 bottom-20 w-14 h-14 bg-brand-teal text-white rounded-full shadow-2xl flex items-center justify-center hover:scale-105 transition" aria-label="Chat with us">
@@ -182,47 +263,76 @@ export default function UchisApp() {
   );
 }
 
-/* =============== ROLE LOGIN =============== */
-function RoleLogin({ setRole, setView }) {
-  const [pick, setPick] = useState(null);
-  const [pin, setPin] = useState('');
+/* =============== STAFF LOGIN (Supabase Auth) =============== */
+function StaffLogin({ currentUser, currentRole, onLogin, onBack, onSignOut }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const PINS = { owner: '0000', manager: '1234', accountant: '5678' };
-  const submit = () => { if (pin === PINS[pick]) { setRole(pick); setView('home'); } else { setErr('Wrong PIN'); setPin(''); } };
-  const roleMeta = {
-    owner: { icon: Star, label: 'Owner', desc: 'Full control — prices, staff, finances, announcements' },
-    manager: { icon: Briefcase, label: 'Manager', desc: 'Operations, products, prices, staff & finance' },
-    accountant: { icon: PieChart, label: 'Accountant', desc: 'Financials & reports (view only)' },
+
+  // Already signed in — offer quick portal entry
+  if (currentUser && currentRole) {
+    const label = { owner: 'Owner', manager: 'Manager', accountant: 'Accountant' }[currentRole] || currentRole;
+    return (
+      <div className="min-h-screen flex flex-col max-w-md mx-auto bg-white">
+        <div className="px-5 pt-6 pb-4">
+          <button onClick={onBack} className="w-10 h-10 rounded-full bg-neutral-100 flex items-center justify-center"><ArrowLeft className="w-5 h-5" /></button>
+        </div>
+        <div className="flex-1 px-6 pt-6">
+          <div className="w-16 h-16 rounded-2xl bg-brand-teal-soft flex items-center justify-center mb-6"><BadgeCheck className="w-8 h-8 brand-teal" /></div>
+          <h1 className="font-display text-3xl font-bold mb-1">Welcome back</h1>
+          <p className="text-sm text-neutral-500 mb-8">Signed in as <span className="font-semibold">{currentUser.email}</span></p>
+          <button onClick={() => onLogin(currentRole)} className="w-full bg-brand-teal text-white rounded-full py-4 font-semibold mb-3">
+            Enter {label} portal
+          </button>
+          <button onClick={onSignOut} className="w-full bg-neutral-100 text-neutral-700 rounded-full py-4 font-semibold flex items-center justify-center gap-2">
+            <LogOut className="w-4 h-4" /> Sign out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const submit = async (e) => {
+    e?.preventDefault();
+    if (!email.trim() || !password) return;
+    setBusy(true); setErr('');
+    try {
+      const { data, error: authErr } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (authErr) throw authErr;
+      const { data: prof, error: profErr } = await supabase.from('profiles').select('role').eq('id', data.user.id).maybeSingle();
+      if (profErr || !prof?.role) {
+        await supabase.auth.signOut();
+        throw new Error('No staff profile found. Ask the owner to set up your access.');
+      }
+      onLogin(prof.role);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
   };
+
   return (
     <div className="min-h-screen flex flex-col max-w-md mx-auto bg-white">
-      <div className="px-5 pt-6 pb-4"><button onClick={() => { setView('home'); }} className="w-10 h-10 rounded-full bg-neutral-100 flex items-center justify-center"><ArrowLeft className="w-5 h-5" /></button></div>
+      <div className="px-5 pt-6 pb-4">
+        <button onClick={onBack} className="w-10 h-10 rounded-full bg-neutral-100 flex items-center justify-center"><ArrowLeft className="w-5 h-5" /></button>
+      </div>
       <div className="flex-1 px-6 pt-6">
+        <div className="w-16 h-16 rounded-2xl bg-brand-teal-soft flex items-center justify-center mb-6"><Lock className="w-8 h-8 brand-teal" /></div>
         <h1 className="font-display text-3xl font-bold mb-1">Staff sign in</h1>
-        <p className="text-sm text-neutral-500 mb-8">Select your role to continue</p>
-        {!pick ? (
-          <div className="space-y-3">
-            {['owner', 'manager', 'accountant'].map(r => { const M = roleMeta[r]; const Icon = M.icon; return (
-              <button key={r} onClick={() => setPick(r)} className="w-full bg-white border-2 border-neutral-200 rounded-2xl p-5 flex items-center gap-4 hover:border-brand-teal transition">
-                <div className="w-12 h-12 rounded-full bg-brand-teal-soft flex items-center justify-center"><Icon className="w-6 h-6 brand-teal" /></div>
-                <div className="flex-1 text-left"><div className="font-display font-bold text-lg">{M.label}</div><div className="text-xs text-neutral-500">{M.desc}</div></div>
-                <ChevronRight className="w-5 h-5 text-neutral-400" />
-              </button>
-            ); })}
-          </div>
-        ) : (
-          <div>
-            <div className="bg-brand-teal-soft rounded-2xl p-4 mb-5 flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center">{(() => { const Icon = roleMeta[pick].icon; return <Icon className="w-5 h-5 brand-teal" />; })()}</div>
-              <div><div className="font-semibold">{roleMeta[pick].label}</div><div className="text-xs text-neutral-500">Enter your 4-digit PIN</div></div>
-            </div>
-            <input autoFocus type="password" inputMode="numeric" maxLength={4} value={pin} onChange={e => { setPin(e.target.value.replace(/\D/g,'')); setErr(''); }} onKeyDown={e => e.key === 'Enter' && submit()} placeholder="••••" className="w-full bg-neutral-50 border-2 border-neutral-200 rounded-2xl px-4 py-4 text-center text-3xl tracking-[0.5em] font-bold mb-2" />
-            {err && <div className="text-xs text-red-500 text-center mb-2">{err}</div>}
-            <div className="text-[11px] text-neutral-400 text-center mb-5">Demo PIN — Owner: 0000 · Manager: 1234 · Accountant: 5678</div>
-            <button onClick={submit} className="w-full bg-brand-teal text-white rounded-full py-4 font-semibold">Sign in</button>
-            <button onClick={() => { setPick(null); setPin(''); setErr(''); }} className="w-full text-neutral-500 text-sm py-3">Back to roles</button>
-          </div>
-        )}
+        <p className="text-sm text-neutral-500 mb-8">Enter your email and password to access your portal</p>
+        <form onSubmit={submit} className="space-y-3">
+          <input type="email" value={email} onChange={e => { setEmail(e.target.value); setErr(''); }} placeholder="Email address" autoComplete="email" className="w-full bg-neutral-50 border-2 border-neutral-200 rounded-2xl px-4 py-4 text-sm" />
+          <input type="password" value={password} onChange={e => { setPassword(e.target.value); setErr(''); }} placeholder="Password" autoComplete="current-password" className="w-full bg-neutral-50 border-2 border-neutral-200 rounded-2xl px-4 py-4 text-sm" />
+          {err && <div className="bg-red-50 border border-red-200 rounded-2xl px-4 py-3 text-sm text-red-700">{err}</div>}
+          <button type="submit" disabled={busy || !email.trim() || !password} className="w-full bg-brand-teal text-white rounded-full py-4 font-semibold disabled:opacity-50">
+            {busy ? 'Signing in…' : 'Sign in'}
+          </button>
+        </form>
+        <p className="text-xs text-neutral-400 text-center mt-8 leading-relaxed">
+          Staff access only. Contact the salon owner to get your login credentials.
+        </p>
       </div>
     </div>
   );
@@ -613,7 +723,7 @@ function SupportInbox({ messages, saveMessages }) {
   );
 }
 
-function OwnerPortal({ services, products, bookings, orders, staff, settings, priceLog, announcements, messages, save, exit }) {
+function OwnerPortal({ services, products, bookings, orders, staff, settings, priceLog, announcements, messages, save, exit, onSignOut }) {
   const [tab, setTab] = useState('overview');
   const newOrders = orders.filter(o => o.stage === 'new').length;
   const pendingBookings = bookings.filter(b => b.status === 'pending').length;
@@ -636,11 +746,14 @@ function OwnerPortal({ services, products, bookings, orders, staff, settings, pr
       <div className="hidden md:flex md:flex-col md:w-60 bg-brand-black text-white p-4 shrink-0 min-h-screen">
         <div className="px-2 mb-1"><div className="font-display italic text-2xl">Uchis</div><div className="text-[10px] tracking-widest uppercase" style={{ color: '#2DD4BF' }}>Owner</div></div>
         <div className="flex flex-col gap-1 mt-6">{tabs.map(t => { const Icon = t.icon; return <button key={t.k} onClick={() => setTab(t.k)} className={`px-3 py-2.5 rounded-xl text-sm flex items-center gap-3 ${tab === t.k ? 'bg-brand-teal text-white' : 'text-white/65 hover:text-white'}`}><Icon className="w-4 h-4" />{t.l}{t.badge && <span className="ml-auto w-2 h-2 bg-red-500 rounded-full" />}</button>; })}</div>
-        <button onClick={exit} className="mt-auto px-3 py-2.5 rounded-xl text-sm flex items-center gap-3 text-white/65 hover:text-white"><LogOut className="w-4 h-4" /> Exit</button>
+        <div className="mt-auto flex flex-col gap-1">
+          <button onClick={exit} className="px-3 py-2.5 rounded-xl text-sm flex items-center gap-3 text-white/65 hover:text-white"><ArrowLeft className="w-4 h-4" /> Customer view</button>
+          <button onClick={onSignOut} className="px-3 py-2.5 rounded-xl text-sm flex items-center gap-3 text-white/65 hover:text-white"><LogOut className="w-4 h-4" /> Sign out</button>
+        </div>
       </div>
       <div className="flex-1 min-w-0 max-w-md mx-auto md:max-w-none w-full">
         <div className="md:hidden bg-brand-black text-white px-5 pt-6 pb-5">
-          <div className="flex items-center justify-between mb-4"><div><div className="text-xs uppercase tracking-widest" style={{ color: '#2DD4BF' }}>Owner</div><h1 className="font-display text-2xl font-bold">Dashboard</h1></div><button onClick={exit} className="px-4 py-2 rounded-full bg-white/10 flex items-center gap-2 text-sm"><LogOut className="w-4 h-4" /> Exit</button></div>
+          <div className="flex items-center justify-between mb-4"><div><div className="text-xs uppercase tracking-widest" style={{ color: '#2DD4BF' }}>Owner</div><h1 className="font-display text-2xl font-bold">Dashboard</h1></div><button onClick={exit} className="px-4 py-2 rounded-full bg-white/10 flex items-center gap-2 text-sm"><ArrowLeft className="w-4 h-4" /> Exit</button></div>
           <div className="grid grid-cols-3 gap-2"><div className="bg-white/10 rounded-2xl p-3"><div className="text-[10px] text-white/60">New orders</div><div className="font-bold text-lg">{newOrders}</div></div><div className="bg-white/10 rounded-2xl p-3"><div className="text-[10px] text-white/60">Bookings</div><div className="font-bold text-lg">{pendingBookings}</div></div><div className="bg-brand-teal rounded-2xl p-3"><div className="text-[10px] text-white/90">Staff</div><div className="font-bold text-lg">{staff.filter(s=>s.specialty!=='Any').length}</div></div></div>
         </div>
         <div className="md:hidden sticky top-0 bg-white z-10 border-b border-neutral-100 flex gap-1 px-3 overflow-x-auto no-scrollbar">{tabs.map(t => <button key={t.k} onClick={() => setTab(t.k)} className={`px-3 py-3 text-xs font-semibold whitespace-nowrap border-b-2 ${tab === t.k ? 'border-brand-teal brand-teal' : 'border-transparent text-neutral-500'}`}>{t.l}{t.badge && <span className="ml-1 w-2 h-2 bg-red-500 rounded-full inline-block" />}</button>)}</div>
@@ -768,7 +881,7 @@ function OwnerFinance({ orders, bookings }) {
 }
 
 /* =============== MANAGER PORTAL (operations only) =============== */
-function ManagerPortal({ services, products, bookings, orders, staff, priceLog, announcements, messages, save, exit }) {
+function ManagerPortal({ services, products, bookings, orders, staff, priceLog, announcements, messages, save, exit, onSignOut }) {
   const [tab, setTab] = useState('overview');
   const newOrders = orders.filter(o => o.stage === 'new').length;
   const pendingBookings = bookings.filter(b => b.status === 'pending').length;
@@ -791,11 +904,14 @@ function ManagerPortal({ services, products, bookings, orders, staff, priceLog, 
       <div className="hidden md:flex md:flex-col md:w-60 bg-brand-black text-white p-4 shrink-0 min-h-screen">
         <div className="px-2 mb-1"><div className="font-display italic text-2xl">Uchis</div><div className="text-[10px] tracking-widest uppercase" style={{ color: '#2DD4BF' }}>Manager</div></div>
         <div className="flex flex-col gap-1 mt-6">{tabs.map(t => { const Icon = t.icon; return <button key={t.k} onClick={() => setTab(t.k)} className={`px-3 py-2.5 rounded-xl text-sm flex items-center gap-3 ${tab === t.k ? 'bg-brand-teal text-white' : 'text-white/65 hover:text-white'}`}><Icon className="w-4 h-4" />{t.l}{t.badge && <span className="ml-auto w-2 h-2 bg-red-500 rounded-full" />}</button>; })}</div>
-        <button onClick={exit} className="mt-auto px-3 py-2.5 rounded-xl text-sm flex items-center gap-3 text-white/65 hover:text-white"><LogOut className="w-4 h-4" /> Exit</button>
+        <div className="mt-auto flex flex-col gap-1">
+          <button onClick={exit} className="px-3 py-2.5 rounded-xl text-sm flex items-center gap-3 text-white/65 hover:text-white"><ArrowLeft className="w-4 h-4" /> Customer view</button>
+          <button onClick={onSignOut} className="px-3 py-2.5 rounded-xl text-sm flex items-center gap-3 text-white/65 hover:text-white"><LogOut className="w-4 h-4" /> Sign out</button>
+        </div>
       </div>
       <div className="flex-1 min-w-0 max-w-md mx-auto md:max-w-none w-full">
         <div className="md:hidden bg-brand-black text-white px-5 pt-6 pb-5">
-          <div className="flex items-center justify-between mb-4"><div><div className="text-xs text-white/60 uppercase tracking-widest">Manager</div><h1 className="font-display text-2xl font-bold">Dashboard</h1></div><button onClick={exit} className="px-4 py-2 rounded-full bg-white/10 flex items-center gap-2 text-sm"><LogOut className="w-4 h-4" /> Exit</button></div>
+          <div className="flex items-center justify-between mb-4"><div><div className="text-xs text-white/60 uppercase tracking-widest">Manager</div><h1 className="font-display text-2xl font-bold">Dashboard</h1></div><button onClick={exit} className="px-4 py-2 rounded-full bg-white/10 flex items-center gap-2 text-sm"><ArrowLeft className="w-4 h-4" /> Exit</button></div>
           <div className="grid grid-cols-3 gap-2"><div className="bg-white/10 rounded-2xl p-3"><div className="text-[10px] text-white/60">New orders</div><div className="font-bold text-lg">{newOrders}</div></div><div className="bg-white/10 rounded-2xl p-3"><div className="text-[10px] text-white/60">Bookings</div><div className="font-bold text-lg">{pendingBookings}</div></div><div className="bg-brand-teal rounded-2xl p-3"><div className="text-[10px] text-white/90">Products</div><div className="font-bold text-lg">{products.length}</div></div></div>
         </div>
         <div className="md:hidden sticky top-0 bg-white z-10 border-b border-neutral-100 flex gap-1 px-3 overflow-x-auto no-scrollbar">{tabs.map(t => <button key={t.k} onClick={() => setTab(t.k)} className={`px-3 py-3 text-xs font-semibold whitespace-nowrap border-b-2 ${tab === t.k ? 'border-brand-teal brand-teal' : 'border-transparent text-neutral-500'}`}>{t.l}{t.badge && <span className="ml-1 w-2 h-2 bg-red-500 rounded-full inline-block" />}</button>)}</div>
@@ -1071,7 +1187,7 @@ function AdminSettings({ settings, saveSettings }) {
 }
 
 /* =============== ACCOUNTANT PORTAL =============== */
-function AccountantPortal({ products, bookings, orders, services, settings, exit }) {
+function AccountantPortal({ products, bookings, orders, services, settings, exit, onSignOut }) {
   const [tab, setTab] = useState('summary');
   const [range, setRange] = useState('all');
 
@@ -1115,11 +1231,14 @@ function AccountantPortal({ products, bookings, orders, services, settings, exit
       <div className="hidden md:flex md:flex-col md:w-60 bg-brand-black text-white p-4 shrink-0 min-h-screen">
         <div className="px-2 mb-1"><div className="font-display italic text-2xl">Uchis</div><div className="text-[10px] tracking-widest uppercase" style={{ color: '#2DD4BF' }}>Accountant</div></div>
         <div className="flex flex-col gap-1 mt-6">{tabs.map(t => { const Icon = t.icon; return <button key={t.k} onClick={() => setTab(t.k)} className={`px-3 py-2.5 rounded-xl text-sm flex items-center gap-3 ${tab === t.k ? 'bg-brand-teal text-white' : 'text-white/65 hover:text-white'}`}><Icon className="w-4 h-4" />{t.l}</button>; })}</div>
-        <button onClick={exit} className="mt-auto px-3 py-2.5 rounded-xl text-sm flex items-center gap-3 text-white/65 hover:text-white"><LogOut className="w-4 h-4" /> Exit</button>
+        <div className="mt-auto flex flex-col gap-1">
+          <button onClick={exit} className="px-3 py-2.5 rounded-xl text-sm flex items-center gap-3 text-white/65 hover:text-white"><ArrowLeft className="w-4 h-4" /> Customer view</button>
+          <button onClick={onSignOut} className="px-3 py-2.5 rounded-xl text-sm flex items-center gap-3 text-white/65 hover:text-white"><LogOut className="w-4 h-4" /> Sign out</button>
+        </div>
       </div>
 
       <div className="flex-1 min-w-0 max-w-md mx-auto md:max-w-none w-full">
-        <div className="md:hidden bg-brand-black text-white px-5 pt-6 pb-5"><div className="flex items-center justify-between"><div><div className="text-xs text-white/60 uppercase tracking-widest">Accountant</div><h1 className="font-display text-2xl font-bold">Financials</h1></div><button onClick={exit} className="px-4 py-2 rounded-full bg-white/10 flex items-center gap-2 text-sm"><LogOut className="w-4 h-4" /> Exit</button></div></div>
+        <div className="md:hidden bg-brand-black text-white px-5 pt-6 pb-5"><div className="flex items-center justify-between"><div><div className="text-xs text-white/60 uppercase tracking-widest">Accountant</div><h1 className="font-display text-2xl font-bold">Financials</h1></div><button onClick={exit} className="px-4 py-2 rounded-full bg-white/10 flex items-center gap-2 text-sm"><ArrowLeft className="w-4 h-4" /> Exit</button></div></div>
         <div className="md:hidden sticky top-0 bg-white z-10 border-b border-neutral-100 flex gap-1 px-3 overflow-x-auto no-scrollbar">{tabs.map(t => <button key={t.k} onClick={() => setTab(t.k)} className={`px-3 py-3 text-xs font-semibold whitespace-nowrap border-b-2 ${tab === t.k ? 'border-brand-teal brand-teal' : 'border-transparent text-neutral-500'}`}>{t.l}</button>)}</div>
 
         <div className="px-5 py-5 md:px-8 md:py-8 md:max-w-5xl">
