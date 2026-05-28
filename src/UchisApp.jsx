@@ -172,23 +172,45 @@ export default function UchisApp() {
     })();
   }, []);
 
-  // ── Auth state listener (staff + customer) ────────────────────────────────
+  // ── Auth state listener — single source of truth for auth changes ───────────
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session?.user) {
-        const { data: staffProf } = await supabase.from('profiles').select('role').eq('id', session.user.id).maybeSingle();
-        if (staffProf?.role) {
-          setAuthUser(session.user); setRole(staffProf.role);
-        } else {
-          setCustomerUser(session.user);
-          const { data: cp } = await supabase.from('customer_profiles').select('*').eq('id', session.user.id).maybeSingle();
-          if (cp) setCustomerProfile(cp);
+      try {
+        if (event === 'SIGNED_IN' && session?.user) {
+          try {
+            const { data: staffProf } = await supabase.from('profiles').select('role').eq('id', session.user.id).maybeSingle();
+            if (staffProf?.role) {
+              // ── Staff sign-in ──
+              setAuthUser(session.user);
+              setRole(staffProf.role);
+              setCustomerUser(null);
+              setCustomerProfile(null);
+              // KEY FIX: change view so the portal renders (was stuck at 'staff-gate')
+              setView('home');
+            } else {
+              // ── Customer sign-in ──
+              setAuthUser(null);
+              setRole(null);
+              setCustomerUser(session.user);
+              try {
+                const { data: cp } = await supabase.from('customer_profiles').select('*').eq('id', session.user.id).maybeSingle();
+                if (cp) {
+                  setCustomerProfile(cp);
+                } else {
+                  // First sign-in after email confirmation — create profile now
+                  await supabase.from('customer_profiles').insert({ id: session.user.id, email: session.user.email, created_at: new Date().toISOString() });
+                  const { data: newCp } = await supabase.from('customer_profiles').select('*').eq('id', session.user.id).maybeSingle();
+                  if (newCp) setCustomerProfile(newCp);
+                }
+              } catch { /* customer_profiles may not be accessible yet */ }
+            }
+          } catch (e) { console.warn('Auth: profile lookup failed:', e); }
         }
-      }
-      if (event === 'SIGNED_OUT') {
-        setAuthUser(null); setRole(null);
-        setCustomerUser(null); setCustomerProfile(null);
-      }
+        if (event === 'SIGNED_OUT') {
+          setAuthUser(null); setRole(null);
+          setCustomerUser(null); setCustomerProfile(null);
+        }
+      } catch (e) { console.warn('onAuthStateChange error:', e); }
     });
     return () => subscription.unsubscribe();
   }, []);
@@ -250,11 +272,11 @@ export default function UchisApp() {
   };
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    try { await supabase.auth.signOut(); } catch {}
     setRole(null); setAuthUser(null); setView('home');
   };
   const handleCustomerSignOut = async () => {
-    await supabase.auth.signOut();
+    try { await supabase.auth.signOut(); } catch {}
     setCustomerUser(null); setCustomerProfile(null);
   };
 
@@ -1546,9 +1568,21 @@ function AuthModal({ initialTab, onClose, onSuccess }) {
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (error) throw error;
+      // Block staff accounts from customer portal
       const { data: staffProf } = await supabase.from('profiles').select('role').eq('id', data.user.id).maybeSingle();
       if (staffProf?.role) { await supabase.auth.signOut(); throw new Error('This is a staff account. Use the Staff sign-in option instead.'); }
-      const { data: cp } = await supabase.from('customer_profiles').select('*').eq('id', data.user.id).maybeSingle();
+      // Fetch or create customer profile (handles first login after email confirmation)
+      let cp = null;
+      try {
+        const { data: existing } = await supabase.from('customer_profiles').select('*').eq('id', data.user.id).maybeSingle();
+        if (existing) {
+          cp = existing;
+        } else {
+          await supabase.from('customer_profiles').insert({ id: data.user.id, email: data.user.email, created_at: new Date().toISOString() });
+          const { data: created } = await supabase.from('customer_profiles').select('*').eq('id', data.user.id).maybeSingle();
+          cp = created;
+        }
+      } catch { /* profile table not accessible — sign-in still succeeds */ }
       onSuccess(data.user, cp);
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
   };
@@ -1562,11 +1596,19 @@ function AuthModal({ initialTab, onClose, onSuccess }) {
       const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { name, phone } } });
       if (error) throw error;
       if (data.user) {
-        await supabase.from('customer_profiles').upsert({ id: data.user.id, name: name.trim(), phone: phone.trim(), email: email.trim(), created_at: new Date().toISOString() }, { onConflict: 'id' });
         if (data.session) {
-          const { data: cp } = await supabase.from('customer_profiles').select('*').eq('id', data.user.id).maybeSingle();
+          // Email confirmation disabled — user is signed in immediately
+          try {
+            await supabase.from('customer_profiles').upsert({ id: data.user.id, name: name.trim(), phone: phone.trim(), email: email.trim(), created_at: new Date().toISOString() }, { onConflict: 'id' });
+          } catch { /* RLS may block if session hasn't propagated yet */ }
+          let cp = null;
+          try {
+            const { data: cpData } = await supabase.from('customer_profiles').select('*').eq('id', data.user.id).maybeSingle();
+            cp = cpData;
+          } catch {}
           onSuccess(data.user, cp);
         } else {
+          // Email confirmation required — profile will be created on first sign-in
           setSuccessMsg('Account created! Check your email to confirm, then sign in.');
         }
       }
