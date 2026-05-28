@@ -294,7 +294,7 @@ export default function UchisApp() {
         {view === 'checkout-booking' && <CheckoutBooking selectedServices={selectedServices} setSelectedServices={setSelectedServices} staff={staff} bookings={bookings} saveBookings={save.bookings} settings={settings} setView={setView} customerProfile={customerProfile} customerId={customerUser?.id} />}
         {view === 'checkout-shop' && <CheckoutShop cart={cart} setCart={setCart} orders={orders} saveOrders={save.orders} products={products} saveProducts={save.products} setView={setView} customerProfile={customerProfile} customerId={customerUser?.id} />}
 
-        {!['checkout-booking', 'checkout-shop'].includes(view) && (
+        {!['checkout-booking', 'checkout-shop', 'chat'].includes(view) && (
           <div className="fixed bottom-0 left-0 right-0 z-40"><div className="max-w-lg mx-auto bg-white border-t border-neutral-200"><div className="grid grid-cols-5">
             {[{ id: 'home', label: 'Home', icon: HomeIcon }, { id: 'services', label: 'Services', icon: Scissors }, { id: 'shop', label: 'Shop', icon: ShoppingBag }, { id: 'bookings', label: 'Bookings', icon: Calendar }, { id: 'profile', label: 'Profile', icon: User }].map(t => {
               const Icon = t.icon; const active = view === t.id;
@@ -836,7 +836,7 @@ function ChatScreen({ messages, saveMessages, setView }) {
         <div ref={endRef} />
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 z-20"><div className="max-w-md mx-auto bg-white border-t border-neutral-100 px-3 py-3 flex items-center gap-2">
+      <div className="fixed bottom-0 left-0 right-0 z-20"><div className="max-w-lg mx-auto bg-white border-t border-neutral-100 px-3 py-3 flex items-center gap-2">
         <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()} placeholder="Type a message..." className="flex-1 bg-neutral-100 rounded-full px-4 py-3 text-sm" />
         <button onClick={send} disabled={!text.trim()} className="w-11 h-11 bg-brand-teal text-white rounded-full flex items-center justify-center disabled:opacity-40 shrink-0"><Send className="w-5 h-5" /></button>
       </div></div>
