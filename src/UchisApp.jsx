@@ -80,24 +80,25 @@ export default function UchisApp() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authInitialTab, setAuthInitialTab] = useState('signin');
 
-  const [services, setServices] = useState([]);
-  const [products, setProducts] = useState([]);
+  // Pre-populate with defaults — pages are never empty even before Supabase loads
+  const [services, setServices] = useState(DEFAULT_SERVICES);
+  const [products, setProducts] = useState(DEFAULT_PRODUCTS);
   const [bookings, setBookings] = useState([]);
   const [orders, setOrders] = useState([]);
-  const [staff, setStaff] = useState([]);
+  const [staff, setStaff] = useState(DEFAULT_STAFF);
   const [priceLog, setPriceLog] = useState([]);
-  const [announcements, setAnnouncements] = useState([]);
-  const [messages, setMessages] = useState([]);
+  const [announcements, setAnnouncements] = useState(DEFAULT_ANNOUNCEMENTS);
+  const [messages, setMessages] = useState(DEFAULT_MESSAGES);
   const [settings, setSettings] = useState(defaultSettings);
 
-  // ── Boot: load everything from Supabase ────────────────────────────────────
+  // ── Boot: auth check → show app → load data in background ───────────────────
   useEffect(() => {
-    // Hard failsafe — app will NEVER be stuck longer than 8 seconds
-    const failsafe = setTimeout(() => setLoading(false), 8000);
+    // Hard failsafe — app will NEVER be stuck longer than 4 seconds
+    const failsafe = setTimeout(() => setLoading(false), 4000);
 
     (async () => {
+      // ── Phase 1: auth only — resolve fast, then show app ─────────────────
       try {
-        // 1. Restore auth session — distinguish staff vs customer
         const sessionRes = await supabase.auth.getSession();
         const session = sessionRes?.data?.session ?? null;
         if (session?.user) {
@@ -107,16 +108,23 @@ export default function UchisApp() {
               setAuthUser(session.user); setRole(staffProf.role);
             } else {
               setCustomerUser(session.user);
-              // customer_profiles may not exist yet — wrap independently
               try {
                 const { data: custProf } = await supabase.from('customer_profiles').select('*').eq('id', session.user.id).maybeSingle();
                 if (custProf) setCustomerProfile(custProf);
-              } catch { /* table not yet created — safe to ignore */ }
+              } catch { /* customer_profiles table not yet created — safe to ignore */ }
             }
           } catch (authErr) { console.warn('Session restore error:', authErr); }
         }
+      } catch (err) {
+        console.warn('Auth check error:', err);
+      } finally {
+        // ✅ Show the app NOW with DEFAULT values — don't wait for data
+        clearTimeout(failsafe);
+        setLoading(false);
+      }
 
-        // 2. Load all app data in parallel
+      // ── Phase 2: background data load — updates state quietly ────────────
+      try {
         const [svcs, prods, bkgs, ords, stf, anns, msgs, plg, cfg] = await Promise.all([
           sbGet('services',      DEFAULT_SERVICES),
           sbGet('products',      DEFAULT_PRODUCTS),
@@ -146,7 +154,7 @@ export default function UchisApp() {
           });
         }
 
-        // 3. First-run seed: write defaults to DB if services key is missing
+        // First-run seed: write defaults to DB if services key is missing
         try {
           const { data: exists } = await supabase.from('app_data').select('key').eq('key', 'services').maybeSingle();
           if (!exists) {
@@ -158,12 +166,8 @@ export default function UchisApp() {
             ]);
           }
         } catch { /* seed step is best-effort */ }
-
       } catch (err) {
-        console.error('Boot load error:', err);
-      } finally {
-        clearTimeout(failsafe);
-        setLoading(false);
+        console.error('Background data load error:', err);
       }
     })();
   }, []);
