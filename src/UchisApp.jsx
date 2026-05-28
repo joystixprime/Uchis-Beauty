@@ -92,19 +92,28 @@ export default function UchisApp() {
 
   // ── Boot: load everything from Supabase ────────────────────────────────────
   useEffect(() => {
+    // Hard failsafe — app will NEVER be stuck longer than 8 seconds
+    const failsafe = setTimeout(() => setLoading(false), 8000);
+
     (async () => {
       try {
         // 1. Restore auth session — distinguish staff vs customer
-        const { data: { session } } = await supabase.auth.getSession();
+        const sessionRes = await supabase.auth.getSession();
+        const session = sessionRes?.data?.session ?? null;
         if (session?.user) {
-          const { data: staffProf } = await supabase.from('profiles').select('role').eq('id', session.user.id).maybeSingle();
-          if (staffProf?.role) {
-            setAuthUser(session.user); setRole(staffProf.role);
-          } else {
-            setCustomerUser(session.user);
-            const { data: custProf } = await supabase.from('customer_profiles').select('*').eq('id', session.user.id).maybeSingle();
-            if (custProf) setCustomerProfile(custProf);
-          }
+          try {
+            const { data: staffProf } = await supabase.from('profiles').select('role').eq('id', session.user.id).maybeSingle();
+            if (staffProf?.role) {
+              setAuthUser(session.user); setRole(staffProf.role);
+            } else {
+              setCustomerUser(session.user);
+              // customer_profiles may not exist yet — wrap independently
+              try {
+                const { data: custProf } = await supabase.from('customer_profiles').select('*').eq('id', session.user.id).maybeSingle();
+                if (custProf) setCustomerProfile(custProf);
+              } catch { /* table not yet created — safe to ignore */ }
+            }
+          } catch (authErr) { console.warn('Session restore error:', authErr); }
         }
 
         // 2. Load all app data in parallel
@@ -138,18 +147,22 @@ export default function UchisApp() {
         }
 
         // 3. First-run seed: write defaults to DB if services key is missing
-        const { data: exists } = await supabase.from('app_data').select('key').eq('key', 'services').maybeSingle();
-        if (!exists) {
-          await Promise.all([
-            sbSet('services', DEFAULT_SERVICES), sbSet('products', DEFAULT_PRODUCTS),
-            sbSet('staff', DEFAULT_STAFF), sbSet('announcements', DEFAULT_ANNOUNCEMENTS),
-            sbSet('messages', DEFAULT_MESSAGES), sbSet('bookings', []),
-            sbSet('orders', []), sbSet('priceLog', []), sbSet('settings', defaultSettings),
-          ]);
-        }
+        try {
+          const { data: exists } = await supabase.from('app_data').select('key').eq('key', 'services').maybeSingle();
+          if (!exists) {
+            await Promise.all([
+              sbSet('services', DEFAULT_SERVICES), sbSet('products', DEFAULT_PRODUCTS),
+              sbSet('staff', DEFAULT_STAFF), sbSet('announcements', DEFAULT_ANNOUNCEMENTS),
+              sbSet('messages', DEFAULT_MESSAGES), sbSet('bookings', []),
+              sbSet('orders', []), sbSet('priceLog', []), sbSet('settings', defaultSettings),
+            ]);
+          }
+        } catch { /* seed step is best-effort */ }
+
       } catch (err) {
         console.error('Boot load error:', err);
       } finally {
+        clearTimeout(failsafe);
         setLoading(false);
       }
     })();
@@ -197,13 +210,26 @@ export default function UchisApp() {
     document.head.appendChild(s);
   }, []);
 
-  // ── Realtime — live chat updates ───────────────────────────────────────────
+  // ── Realtime — live chat updates (fully guarded) ──────────────────────────
   useEffect(() => {
-    const ch = supabase.channel('uchis-messages')
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'app_data', filter: 'key=eq.messages' },
-        (payload) => { if (payload.new?.value) setMessages(payload.new.value); })
-      .subscribe();
-    return () => supabase.removeChannel(ch);
+    let ch;
+    try {
+      ch = supabase
+        .channel('uchis-messages')
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'app_data', filter: 'key=eq.messages' },
+          (payload) => { try { if (payload.new?.value) setMessages(payload.new.value); } catch {} }
+        )
+        .subscribe((status, err) => {
+          if (err) console.warn('Realtime chat subscription error:', err);
+        });
+    } catch (e) {
+      console.warn('Realtime setup failed (chat will still work, just not live):', e);
+    }
+    return () => {
+      try { if (ch) supabase.removeChannel(ch); } catch {}
+    };
   }, []);
 
   // ── Save functions — single write to Supabase ──────────────────────────────
