@@ -25,6 +25,16 @@ const sbSet = async (key, value) => {
   } catch (e) { console.error(`sbSet(${key}):`, e); }
 };
 
+// ── EmailJS notification helper ───────────────────────────────────────────
+const sendAdminEmail = async (templateId, params) => {
+  try {
+    const svcId = import.meta.env.VITE_EMAILJS_SERVICE_ID;
+    const pubKey = import.meta.env.VITE_EMAILJS_PUBLIC_KEY;
+    if (!svcId || !pubKey || !templateId || !window.emailjs) return;
+    await window.emailjs.send(svcId, templateId, params);
+  } catch (e) { console.warn('EmailJS send failed:', e); }
+};
+
 const DEFAULT_SERVICES = [
   { id: 's1', category: 'Hair', name: 'Box Braids', duration: 240, price: 25000, desc: 'Classic box braids, any length', popular: true },
   { id: 's2', category: 'Hair', name: 'Knotless Braids', duration: 300, price: 35000, desc: 'Lightweight, no tension knotless style', popular: true },
@@ -171,6 +181,19 @@ export default function UchisApp() {
     if (document.querySelector('script[src*="paystack"]')) return;
     const s = document.createElement('script');
     s.src = 'https://js.paystack.co/v1/inline.js'; s.async = true;
+    document.head.appendChild(s);
+  }, []);
+
+  // ── EmailJS script loader ──────────────────────────────────────────────────
+  useEffect(() => {
+    if (document.querySelector('script[src*="emailjs"]')) return;
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js';
+    s.async = true;
+    s.onload = () => {
+      const pubKey = import.meta.env.VITE_EMAILJS_PUBLIC_KEY;
+      if (pubKey && window.emailjs) window.emailjs.init({ publicKey: pubKey });
+    };
     document.head.appendChild(s);
   }, []);
 
@@ -496,7 +519,21 @@ function CheckoutBooking({ selectedServices, setSelectedServices, staff, booking
   const confirm = async (depositPaidViaPaystack = false) => {
     if (!customer.name || !customer.phone) return alert('Please fill in your name and phone');
     const booking = { id: 'bk_' + Date.now(), customerId: customerId || null, services: selectedServices, staff: selectedStaff, staffId: selectedStaff.id, date, time, total, totalMin, peak, depositAmount, depositPaid: depositAmount > 0 || depositPaidViaPaystack, cancellationFeePercent: cancelPct, cancellationFee: cancelFee, customer, status: 'pending', createdAt: new Date().toISOString() };
-    await saveBookings([...bookings, booking]); setConfirmed(booking); setSelectedServices([]);
+    await saveBookings([...bookings, booking]);
+    // Email admin notification
+    sendAdminEmail(import.meta.env.VITE_EMAILJS_TEMPLATE_BOOKING, {
+      customer_name: customer.name,
+      customer_phone: customer.phone,
+      customer_email: customer.email || 'N/A',
+      services: selectedServices.map(s => s.name).join(', '),
+      staff_name: selectedStaff.name,
+      date, time,
+      total: `₦${(Number(total)||0).toLocaleString('en-NG')}`,
+      deposit: depositAmount > 0 ? `₦${(Number(depositAmount)||0).toLocaleString('en-NG')}` : 'None',
+      notes: customer.notes || 'None',
+      booking_id: booking.id,
+    });
+    setConfirmed(booking); setSelectedServices([]);
   };
   if (confirmed) return (
     <div className="min-h-screen flex flex-col"><div className="flex-1 px-6 pt-16 text-center">
@@ -608,6 +645,20 @@ function CheckoutShop({ cart, setCart, orders, saveOrders, products, saveProduct
     const order = { id: 'ord_' + Date.now(), customerId: customerId || null, items: cart, subtotal, deliveryFee, total, customer, fulfill, stage: 'new', paid, history: [{ stage: 'new', at: now }], date: now };
     await saveOrders([...orders, order]);
     await saveProducts(products.map(p => { const ci = cart.find(c => c.id === p.id); return ci ? { ...p, stock: Math.max(0, p.stock - ci.qty) } : p; }));
+    // Email admin notification
+    sendAdminEmail(import.meta.env.VITE_EMAILJS_TEMPLATE_ORDER, {
+      customer_name: customer.name,
+      customer_phone: customer.phone,
+      customer_email: customer.email || 'N/A',
+      items: cart.map(c => `${c.qty}× ${c.name}`).join(', '),
+      subtotal: `₦${(Number(subtotal)||0).toLocaleString('en-NG')}`,
+      delivery_fee: `₦${(Number(deliveryFee)||0).toLocaleString('en-NG')}`,
+      total: `₦${(Number(total)||0).toLocaleString('en-NG')}`,
+      fulfill,
+      address: customer.address || 'N/A',
+      paid: paid ? 'Paid via Paystack' : 'Unpaid (cash/pickup)',
+      order_id: order.id,
+    });
     setConfirmed(order); setCart([]);
   };
   if (confirmed) return (
