@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Calendar, ShoppingBag, Home as HomeIcon, User, Star, Clock, MapPin, Plus, Minus, X, ChevronRight, Check, Lock, LogOut, TrendingUp, Package, Edit3, Trash2, Scissors, ArrowLeft, Bell, Upload, Image as ImageIcon, Settings as SettingsIcon, DollarSign, FileText, Briefcase, ClipboardList, Download, History, ArrowRight, Truck, BadgeCheck, Wallet, PieChart, Users as UsersIcon, MessageCircle, Send } from 'lucide-react';
+import { Search, Calendar, ShoppingBag, Home as HomeIcon, User, Star, Clock, MapPin, Plus, Minus, X, ChevronRight, Check, Lock, LogOut, TrendingUp, Package, Edit3, Trash2, Scissors, ArrowLeft, Bell, Upload, Image as ImageIcon, Settings as SettingsIcon, DollarSign, FileText, Briefcase, ClipboardList, Download, History, ArrowRight, Truck, BadgeCheck, Wallet, PieChart, Users as UsersIcon, MessageCircle, Send, Eye, EyeOff, CreditCard } from 'lucide-react';
 import { supabase } from './lib/supabase';
 
 const n = (v) => (Number(v) || 0).toLocaleString('en-NG');
@@ -65,6 +65,10 @@ export default function UchisApp() {
   const [selectedServices, setSelectedServices] = useState([]);
   const [cart, setCart] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [customerUser, setCustomerUser] = useState(null);
+  const [customerProfile, setCustomerProfile] = useState(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authInitialTab, setAuthInitialTab] = useState('signin');
 
   const [services, setServices] = useState([]);
   const [products, setProducts] = useState([]);
@@ -80,12 +84,17 @@ export default function UchisApp() {
   useEffect(() => {
     (async () => {
       try {
-        // 1. Restore auth session
+        // 1. Restore auth session — distinguish staff vs customer
         const { data: { session } } = await supabase.auth.getSession();
         if (session?.user) {
-          setAuthUser(session.user);
-          const { data: prof } = await supabase.from('profiles').select('role').eq('id', session.user.id).maybeSingle();
-          if (prof?.role) setRole(prof.role);
+          const { data: staffProf } = await supabase.from('profiles').select('role').eq('id', session.user.id).maybeSingle();
+          if (staffProf?.role) {
+            setAuthUser(session.user); setRole(staffProf.role);
+          } else {
+            setCustomerUser(session.user);
+            const { data: custProf } = await supabase.from('customer_profiles').select('*').eq('id', session.user.id).maybeSingle();
+            if (custProf) setCustomerProfile(custProf);
+          }
         }
 
         // 2. Load all app data in parallel
@@ -136,17 +145,42 @@ export default function UchisApp() {
     })();
   }, []);
 
-  // ── Auth state listener ────────────────────────────────────────────────────
+  // ── Auth state listener (staff + customer) ────────────────────────────────
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_IN' && session?.user) {
-        setAuthUser(session.user);
-        const { data: prof } = await supabase.from('profiles').select('role').eq('id', session.user.id).maybeSingle();
-        if (prof?.role) setRole(prof.role);
+        const { data: staffProf } = await supabase.from('profiles').select('role').eq('id', session.user.id).maybeSingle();
+        if (staffProf?.role) {
+          setAuthUser(session.user); setRole(staffProf.role);
+        } else {
+          setCustomerUser(session.user);
+          const { data: cp } = await supabase.from('customer_profiles').select('*').eq('id', session.user.id).maybeSingle();
+          if (cp) setCustomerProfile(cp);
+        }
       }
-      if (event === 'SIGNED_OUT') { setAuthUser(null); setRole(null); }
+      if (event === 'SIGNED_OUT') {
+        setAuthUser(null); setRole(null);
+        setCustomerUser(null); setCustomerProfile(null);
+      }
     });
     return () => subscription.unsubscribe();
+  }, []);
+
+  // ── Paystack script loader ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (document.querySelector('script[src*="paystack"]')) return;
+    const s = document.createElement('script');
+    s.src = 'https://js.paystack.co/v1/inline.js'; s.async = true;
+    document.head.appendChild(s);
+  }, []);
+
+  // ── Realtime — live chat updates ───────────────────────────────────────────
+  useEffect(() => {
+    const ch = supabase.channel('uchis-messages')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'app_data', filter: 'key=eq.messages' },
+        (payload) => { if (payload.new?.value) setMessages(payload.new.value); })
+      .subscribe();
+    return () => supabase.removeChannel(ch);
   }, []);
 
   // ── Save functions — single write to Supabase ──────────────────────────────
@@ -165,6 +199,10 @@ export default function UchisApp() {
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     setRole(null); setAuthUser(null); setView('home');
+  };
+  const handleCustomerSignOut = async () => {
+    await supabase.auth.signOut();
+    setCustomerUser(null); setCustomerProfile(null);
   };
 
   if (loading) return (
@@ -222,18 +260,19 @@ export default function UchisApp() {
   return (
     <div className="min-h-screen bg-neutral-50" style={fontStyle}>
       {styleBlock}
-      <div className="pb-24 max-w-md mx-auto bg-white min-h-screen shadow-xl">
-        {view === 'home' && <HomeScreen setView={setView} services={services} staff={staff} announcements={announcements} />}
+      <div className="pb-24 w-full max-w-lg mx-auto bg-white min-h-screen shadow-xl relative">
+        {view === 'home' && <HomeScreen setView={setView} services={services} staff={staff} announcements={announcements} customerUser={customerUser} customerProfile={customerProfile} onOpenAuth={() => { setAuthInitialTab('signin'); setShowAuthModal(true); }} />}
         {view === 'services' && <ServicesScreen services={services} selectedServices={selectedServices} setSelectedServices={setSelectedServices} setView={setView} />}
         {view === 'shop' && <ShopScreen products={products} cart={cart} setCart={setCart} setView={setView} />}
-        {view === 'bookings' && <BookingsScreen bookings={bookings} saveBookings={save.bookings} setView={setView} />}
-        {view === 'profile' && <ProfileScreen setView={setView} bookings={bookings} />}
+        {view === 'bookings' && <BookingsScreen bookings={bookings} saveBookings={save.bookings} setView={setView} customerId={customerUser?.id} />}
+        {view === 'orders' && <OrdersScreen orders={orders} customerId={customerUser?.id} setView={setView} />}
+        {view === 'profile' && <ProfileScreen setView={setView} bookings={bookings} orders={orders} customerUser={customerUser} customerProfile={customerProfile} onOpenAuth={(tab) => { setAuthInitialTab(tab || 'signin'); setShowAuthModal(true); }} onSignOut={handleCustomerSignOut} />}
         {view === 'chat' && <ChatScreen messages={messages} saveMessages={save.messages} setView={setView} />}
-        {view === 'checkout-booking' && <CheckoutBooking selectedServices={selectedServices} setSelectedServices={setSelectedServices} staff={staff} bookings={bookings} saveBookings={save.bookings} settings={settings} setView={setView} />}
-        {view === 'checkout-shop' && <CheckoutShop cart={cart} setCart={setCart} orders={orders} saveOrders={save.orders} products={products} saveProducts={save.products} setView={setView} />}
+        {view === 'checkout-booking' && <CheckoutBooking selectedServices={selectedServices} setSelectedServices={setSelectedServices} staff={staff} bookings={bookings} saveBookings={save.bookings} settings={settings} setView={setView} customerProfile={customerProfile} customerId={customerUser?.id} />}
+        {view === 'checkout-shop' && <CheckoutShop cart={cart} setCart={setCart} orders={orders} saveOrders={save.orders} products={products} saveProducts={save.products} setView={setView} customerProfile={customerProfile} customerId={customerUser?.id} />}
 
         {!['checkout-booking', 'checkout-shop'].includes(view) && (
-          <div className="fixed bottom-0 left-0 right-0 z-40"><div className="max-w-md mx-auto bg-white border-t border-neutral-200"><div className="grid grid-cols-5">
+          <div className="fixed bottom-0 left-0 right-0 z-40"><div className="max-w-lg mx-auto bg-white border-t border-neutral-200"><div className="grid grid-cols-5">
             {[{ id: 'home', label: 'Home', icon: HomeIcon }, { id: 'services', label: 'Services', icon: Scissors }, { id: 'shop', label: 'Shop', icon: ShoppingBag }, { id: 'bookings', label: 'Bookings', icon: Calendar }, { id: 'profile', label: 'Profile', icon: User }].map(t => {
               const Icon = t.icon; const active = view === t.id;
               return <button key={t.id} onClick={() => setView(t.id)} className="flex flex-col items-center py-3 gap-1"><Icon className={`w-5 h-5 ${active ? 'brand-teal' : 'text-neutral-400'}`} strokeWidth={active ? 2.5 : 2} /><span className={`text-[10px] font-medium ${active ? 'brand-teal' : 'text-neutral-500'}`}>{t.label}</span></button>;
@@ -242,7 +281,7 @@ export default function UchisApp() {
         )}
 
         {selectedServices.length > 0 && view !== 'checkout-booking' && (
-          <div className="fixed bottom-16 left-0 right-0 z-30"><div className="max-w-md mx-auto px-4 pb-2">
+          <div className="fixed bottom-16 left-0 right-0 z-30"><div className="max-w-lg mx-auto px-4 pb-2">
             <button onClick={() => setView('checkout-booking')} className="w-full bg-brand-black text-white rounded-full py-4 px-6 flex items-center justify-between shadow-2xl">
               <div className="flex items-center gap-3"><div className="w-8 h-8 bg-brand-teal rounded-full flex items-center justify-center text-xs font-bold">{selectedServices.length}</div><span className="font-semibold">Continue</span></div>
               <div className="flex items-center gap-1"><span className="font-bold">₦{n(selectedServices.reduce((s,x)=>s+x.price,0))}</span><ChevronRight className="w-5 h-5" /></div>
@@ -251,12 +290,16 @@ export default function UchisApp() {
         )}
 
         {!['chat', 'checkout-booking', 'checkout-shop'].includes(view) && selectedServices.length === 0 && (
-          <div className="fixed bottom-0 left-0 right-0 z-30 pointer-events-none"><div className="max-w-md mx-auto relative">
+          <div className="fixed bottom-0 left-0 right-0 z-30 pointer-events-none"><div className="max-w-lg mx-auto relative">
             <button onClick={() => setView('chat')} className="pointer-events-auto absolute right-4 bottom-20 w-14 h-14 bg-brand-teal text-white rounded-full shadow-2xl flex items-center justify-center hover:scale-105 transition" aria-label="Chat with us">
               <MessageCircle className="w-6 h-6" />
               {messages.some(m => m.from === 'support' && !m.read) && <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-red-500 rounded-full border-2 border-white" />}
             </button>
           </div></div>
+        )}
+
+        {showAuthModal && (
+          <AuthModal initialTab={authInitialTab} onClose={() => setShowAuthModal(false)} onSuccess={(user, profile) => { setCustomerUser(user); if (profile) setCustomerProfile(profile); setShowAuthModal(false); }} />
         )}
       </div>
     </div>
@@ -339,7 +382,7 @@ function StaffLogin({ currentUser, currentRole, onLogin, onBack, onSignOut }) {
 }
 
 /* =============== HOME =============== */
-function HomeScreen({ setView, services, staff, announcements }) {
+function HomeScreen({ setView, services, staff, announcements, customerUser, customerProfile, onOpenAuth }) {
   const popular = services.filter(s => s.popular).slice(0, 4);
   const categories = [{ name: 'Hair', emoji: '💇🏾‍♀️' }, { name: 'Nails', emoji: '💅' }, { name: 'Feet', emoji: '🌸' }, { name: 'Packages', emoji: '✨' }];
   const liveAnnouncements = (announcements || []).filter(a => a.active && (a.audience === 'customer' || a.audience === 'both'));
@@ -349,7 +392,13 @@ function HomeScreen({ setView, services, staff, announcements }) {
     <div>
       <div className="px-5 pt-6 pb-4 bg-white"><div className="flex items-center justify-between mb-1">
         <div><div className="text-xs text-neutral-500">Welcome to</div><div className="font-display text-2xl italic">Uchis Beauty Salon</div></div>
-        <div className="w-10 h-10 rounded-full bg-brand-teal-soft flex items-center justify-center"><User className="w-5 h-5 brand-teal" /></div>
+        <button onClick={customerUser ? () => setView('profile') : onOpenAuth} className="w-10 h-10 rounded-full overflow-hidden bg-brand-teal-soft flex items-center justify-center shrink-0">
+          {customerUser ? (
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-teal-400 to-teal-600 flex items-center justify-center text-white font-bold text-sm">
+              {(customerProfile?.name || customerUser.email)?.[0]?.toUpperCase() || 'U'}
+            </div>
+          ) : <User className="w-5 h-5 brand-teal" />}
+        </button>
       </div></div>
       {visible.length > 0 && (
         <div className="px-5 pb-2 space-y-2">{visible.map(a => (
@@ -427,11 +476,11 @@ function ServicesScreen({ services, selectedServices, setSelectedServices, setVi
 }
 
 /* =============== CHECKOUT BOOKING =============== */
-function CheckoutBooking({ selectedServices, setSelectedServices, staff, bookings, saveBookings, settings, setView }) {
+function CheckoutBooking({ selectedServices, setSelectedServices, staff, bookings, saveBookings, settings, setView, customerProfile, customerId }) {
   const [step, setStep] = useState(1);
   const [selectedStaff, setSelectedStaff] = useState(staff[staff.length - 1]);
   const [date, setDate] = useState(''); const [time, setTime] = useState('');
-  const [customer, setCustomer] = useState({ name: '', phone: '', email: '', notes: '' });
+  const [customer, setCustomer] = useState({ name: customerProfile?.name || '', phone: customerProfile?.phone || '', email: customerProfile?.email || '', notes: '' });
   const [confirmed, setConfirmed] = useState(null);
   const total = selectedServices.reduce((s, x) => s + x.price, 0);
   const totalMin = selectedServices.reduce((s, x) => s + x.duration, 0);
@@ -444,9 +493,9 @@ function CheckoutBooking({ selectedServices, setSelectedServices, staff, booking
   const cancelPct = settings?.cancellationFeePercent || 0;
   const cancelFee = peak ? Math.round(depositAmount * cancelPct / 100) : 0;
   const remove = (id) => { const next = selectedServices.filter(x => x.id !== id); setSelectedServices(next); if (next.length === 0) setView('services'); };
-  const confirm = async () => {
+  const confirm = async (depositPaidViaPaystack = false) => {
     if (!customer.name || !customer.phone) return alert('Please fill in your name and phone');
-    const booking = { id: 'bk_' + Date.now(), services: selectedServices, staff: selectedStaff, staffId: selectedStaff.id, date, time, total, totalMin, peak, depositAmount, depositPaid: depositAmount > 0, cancellationFeePercent: cancelPct, cancellationFee: cancelFee, customer, status: 'pending', createdAt: new Date().toISOString() };
+    const booking = { id: 'bk_' + Date.now(), customerId: customerId || null, services: selectedServices, staff: selectedStaff, staffId: selectedStaff.id, date, time, total, totalMin, peak, depositAmount, depositPaid: depositAmount > 0 || depositPaidViaPaystack, cancellationFeePercent: cancelPct, cancellationFee: cancelFee, customer, status: 'pending', createdAt: new Date().toISOString() };
     await saveBookings([...bookings, booking]); setConfirmed(booking); setSelectedServices([]);
   };
   if (confirmed) return (
@@ -500,7 +549,15 @@ function CheckoutBooking({ selectedServices, setSelectedServices, staff, booking
           <div className="bg-neutral-50 rounded-2xl p-4 mb-4"><div className="text-xs font-semibold text-neutral-600 mb-3">BOOKING SUMMARY</div>{selectedServices.map(s => <div key={s.id} className="flex justify-between text-sm py-1"><span>{s.name}</span><span>₦{n(s.price)}</span></div>)}<div className="border-t border-neutral-200 mt-2 pt-2 flex justify-between text-sm font-bold"><span>Total</span><span>₦{n(total)}</span></div>{peak && depositAmount > 0 && <div className="flex justify-between text-sm brand-teal font-bold mt-1"><span>Pay now (deposit)</span><span>₦{n(depositAmount)}</span></div>}</div>
         </div>)}
       </div>
-      <div className="p-5 bg-white border-t border-neutral-100">{step < 3 ? <button onClick={() => setStep(step + 1)} disabled={(step === 2 && (!date || !time))} className="w-full bg-brand-black text-white rounded-full py-4 font-semibold disabled:opacity-40">Continue • ₦{n(total)}</button> : <button onClick={confirm} className="w-full bg-brand-teal text-white rounded-full py-4 font-semibold">{peak && depositAmount > 0 ? `Pay deposit ₦${n(depositAmount)} & request` : `Request booking • ₦${n(total)}`}</button>}</div>
+      <div className="p-5 bg-white border-t border-neutral-100">
+        {step < 3 ? (
+          <button onClick={() => setStep(step + 1)} disabled={(step === 2 && (!date || !time))} className="w-full bg-brand-black text-white rounded-full py-4 font-semibold disabled:opacity-40">Continue • ₦{n(total)}</button>
+        ) : peak && depositAmount > 0 ? (
+          <PaystackButton amount={depositAmount} email={customer.email} name={customer.name} phone={customer.phone} orderId={'bk_' + Date.now()} label={`Pay deposit ₦${n(depositAmount)} & request`} disabled={!customer.name || !customer.phone} onSuccess={() => confirm(true)} />
+        ) : (
+          <button onClick={() => confirm(false)} className="w-full bg-brand-teal text-white rounded-full py-4 font-semibold">Request booking • ₦{n(total)}</button>
+        )}
+      </div>
     </div>
   );
 }
@@ -537,18 +594,18 @@ function ShopScreen({ products, cart, setCart, setView }) {
 }
 
 /* =============== CHECKOUT SHOP =============== */
-function CheckoutShop({ cart, setCart, orders, saveOrders, products, saveProducts, setView }) {
-  const [customer, setCustomer] = useState({ name: '', phone: '', email: '', address: '' });
+function CheckoutShop({ cart, setCart, orders, saveOrders, products, saveProducts, setView, customerProfile, customerId }) {
+  const [customer, setCustomer] = useState({ name: customerProfile?.name || '', phone: customerProfile?.phone || '', email: customerProfile?.email || '', address: '' });
   const [confirmed, setConfirmed] = useState(null);
   const [fulfill, setFulfill] = useState('pickup');
   const subtotal = cart.reduce((s, c) => s + c.price * c.qty, 0);
   const deliveryFee = fulfill === 'delivery' ? 1500 : 0;
   const total = subtotal + deliveryFee;
-  const place = async () => {
+  const place = async (paid = false) => {
     if (!customer.name || !customer.phone) return alert('Please fill in your name and phone');
     if (fulfill === 'delivery' && !customer.address) return alert('Please enter a delivery address');
     const now = new Date().toISOString();
-    const order = { id: 'ord_' + Date.now(), items: cart, subtotal, deliveryFee, total, customer, fulfill, stage: 'new', paid: false, history: [{ stage: 'new', at: now }], date: now };
+    const order = { id: 'ord_' + Date.now(), customerId: customerId || null, items: cart, subtotal, deliveryFee, total, customer, fulfill, stage: 'new', paid, history: [{ stage: 'new', at: now }], date: now };
     await saveOrders([...orders, order]);
     await saveProducts(products.map(p => { const ci = cart.find(c => c.id === p.id); return ci ? { ...p, stock: Math.max(0, p.stock - ci.qty) } : p; }));
     setConfirmed(order); setCart([]);
@@ -569,17 +626,22 @@ function CheckoutShop({ cart, setCart, orders, saveOrders, products, saveProduct
         <div className="space-y-3 mb-6"><input value={customer.name} onChange={e => setCustomer({...customer, name: e.target.value})} placeholder="Full name" className="w-full bg-neutral-50 border border-neutral-200 rounded-2xl px-4 py-3.5 text-sm" /><input value={customer.phone} onChange={e => setCustomer({...customer, phone: e.target.value})} placeholder="Phone" className="w-full bg-neutral-50 border border-neutral-200 rounded-2xl px-4 py-3.5 text-sm" />{fulfill === 'delivery' && <textarea value={customer.address} onChange={e => setCustomer({...customer, address: e.target.value})} placeholder="Delivery address" rows={2} className="w-full bg-neutral-50 border border-neutral-200 rounded-2xl px-4 py-3.5 text-sm resize-none" />}</div>
         <div className="bg-neutral-50 rounded-2xl p-4"><div className="flex justify-between text-sm mb-1"><span className="text-neutral-500">Subtotal</span><span>₦{n(subtotal)}</span></div><div className="flex justify-between text-sm mb-1"><span className="text-neutral-500">{fulfill === 'delivery' ? 'Delivery' : 'Pickup'}</span><span>₦{n(deliveryFee)}</span></div><div className="border-t border-neutral-200 pt-2 mt-2 flex justify-between font-bold"><span>Total</span><span>₦{n(total)}</span></div></div>
       </div>
-      <div className="p-5 bg-white border-t border-neutral-100"><button onClick={place} className="w-full bg-brand-teal text-white rounded-full py-4 font-semibold">Place order • ₦{n(total)}</button></div>
+      <div className="p-5 bg-white border-t border-neutral-100 space-y-2">
+        <PaystackButton amount={total} email={customer.email} name={customer.name} phone={customer.phone} orderId={'ord_' + Date.now()} label={`Pay ₦${n(total)} securely`} onSuccess={() => place(true)} onClose={() => {}} />
+        <button onClick={() => place(false)} className="w-full border-2 border-neutral-200 text-neutral-600 rounded-full py-3 text-sm font-semibold">Pay at pickup / cash on delivery</button>
+      </div>
     </div>
   );
 }
 
 /* =============== MY BOOKINGS =============== */
-function BookingsScreen({ bookings, saveBookings, setView }) {
+function BookingsScreen({ bookings, saveBookings, setView, customerId }) {
   const [tab, setTab] = useState('upcoming');
   const now = new Date().toISOString().split('T')[0];
-  const upcoming = bookings.filter(b => b.date >= now && b.status !== 'cancelled' && b.status !== 'completed');
-  const past = bookings.filter(b => b.date < now || b.status === 'cancelled' || b.status === 'completed');
+  // If signed in, show only their bookings; otherwise show all (guest flow)
+  const myBookings = customerId ? bookings.filter(b => b.customerId === customerId || !b.customerId) : bookings;
+  const upcoming = myBookings.filter(b => b.date >= now && b.status !== 'cancelled' && b.status !== 'completed');
+  const past = myBookings.filter(b => b.date < now || b.status === 'cancelled' || b.status === 'completed');
   const list = tab === 'upcoming' ? upcoming : past;
 
   const cancelBooking = (b) => {
@@ -616,13 +678,58 @@ function BookingsScreen({ bookings, saveBookings, setView }) {
 }
 
 /* =============== PROFILE =============== */
-function ProfileScreen({ setView, bookings }) {
+function ProfileScreen({ setView, bookings, orders, customerUser, customerProfile, onOpenAuth, onSignOut }) {
+  if (!customerUser) {
+    return (
+      <div>
+        <div className="px-5 pt-6 pb-5 bg-white">
+          <h1 className="font-display text-2xl font-bold mb-6">Profile</h1>
+          <div className="text-center py-6">
+            <div className="w-20 h-20 rounded-full bg-brand-teal-soft flex items-center justify-center mx-auto mb-4"><User className="w-10 h-10 brand-teal" /></div>
+            <h2 className="font-display text-xl font-bold mb-2">Join Uchis Beauty</h2>
+            <p className="text-sm text-neutral-500 mb-6 px-4">Sign up to track your bookings, manage your orders, and get exclusive offers.</p>
+            <button onClick={() => onOpenAuth('signup')} className="w-full bg-brand-teal text-white rounded-full py-4 font-semibold mb-3">Create account</button>
+            <button onClick={() => onOpenAuth('signin')} className="w-full bg-neutral-100 text-neutral-700 rounded-full py-4 font-semibold">Sign in</button>
+          </div>
+        </div>
+        <div className="px-5 py-3">
+          <button onClick={() => setView('staff-gate')} className="w-full bg-white border border-neutral-200 rounded-2xl p-4 flex items-center gap-3"><div className="w-9 h-9 rounded-full bg-neutral-100 flex items-center justify-center"><Lock className="w-4 h-4 text-neutral-600" /></div><span className="flex-1 text-sm font-medium text-left">Staff sign in</span><ChevronRight className="w-4 h-4 text-neutral-400" /></button>
+        </div>
+        <div className="text-center py-6 text-xs text-neutral-400">Uchis Beauty Salon</div>
+      </div>
+    );
+  }
+
+  const myBookings = bookings.filter(b => b.customerId === customerUser.id);
+  const myOrders = orders.filter(o => o.customerId === customerUser.id);
+  const initial = (customerProfile?.name || customerUser.email)?.[0]?.toUpperCase() || 'U';
+
   return (
     <div>
-      <div className="px-5 pt-6 pb-5 bg-white"><h1 className="font-display text-2xl font-bold mb-6">Profile</h1><div className="flex items-center gap-4"><div className="w-16 h-16 rounded-full bg-gradient-to-br from-teal-400 to-teal-600 flex items-center justify-center text-white text-2xl font-bold">G</div><div><div className="font-semibold">Guest user</div><div className="text-xs text-neutral-500">{bookings.length} bookings</div></div></div></div>
-      <div className="px-5 py-3"><div className="bg-white border border-neutral-200 rounded-2xl overflow-hidden">{[{ icon: Calendar, label: 'My bookings', onClick: () => setView('bookings') }, { icon: ShoppingBag, label: 'Shop', onClick: () => setView('shop') }].map((it, i) => { const Icon = it.icon; return <button key={i} onClick={it.onClick} className="w-full flex items-center gap-3 p-4 border-b last:border-b-0 border-neutral-100 text-left"><div className="w-9 h-9 rounded-full bg-brand-teal-soft flex items-center justify-center"><Icon className="w-4 h-4 brand-teal" /></div><span className="flex-1 text-sm font-medium">{it.label}</span><ChevronRight className="w-4 h-4 text-neutral-400" /></button>; })}</div></div>
-      <div className="px-5 py-3"><button onClick={() => setView('staff-gate')} className="w-full bg-white border border-neutral-200 rounded-2xl p-4 flex items-center gap-3"><div className="w-9 h-9 rounded-full bg-neutral-100 flex items-center justify-center"><Lock className="w-4 h-4 text-neutral-600" /></div><span className="flex-1 text-sm font-medium text-left">Staff sign in</span><ChevronRight className="w-4 h-4 text-neutral-400" /></button></div>
-      <div className="text-center py-6 text-xs text-neutral-400">Uchis Beauty Salon — Role-based build</div>
+      <div className="px-5 pt-6 pb-5 bg-white">
+        <h1 className="font-display text-2xl font-bold mb-4">My profile</h1>
+        <div className="flex items-center gap-4 mb-5">
+          <div className="w-16 h-16 rounded-full bg-gradient-to-br from-teal-400 to-teal-600 flex items-center justify-center text-white text-2xl font-bold">{initial}</div>
+          <div><div className="font-semibold">{customerProfile?.name || 'Customer'}</div><div className="text-xs text-neutral-500">{customerUser.email}</div>{customerProfile?.phone && <div className="text-xs text-neutral-500 mt-0.5">{customerProfile.phone}</div>}</div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-brand-teal-soft rounded-2xl p-4 text-center"><div className="font-display text-2xl font-bold brand-teal">{myBookings.length}</div><div className="text-xs text-neutral-500 mt-0.5">Bookings</div></div>
+          <div className="bg-neutral-50 rounded-2xl p-4 text-center"><div className="font-display text-2xl font-bold">{myOrders.length}</div><div className="text-xs text-neutral-500 mt-0.5">Orders</div></div>
+        </div>
+      </div>
+      <div className="px-5 py-3">
+        <div className="bg-white border border-neutral-200 rounded-2xl overflow-hidden">
+          {[{ icon: Calendar, label: 'My bookings', sub: `${myBookings.length} total`, onClick: () => setView('bookings') }, { icon: ShoppingBag, label: 'My orders', sub: `${myOrders.length} total`, onClick: () => setView('orders') }, { icon: MessageCircle, label: 'Chat with us', sub: 'Live support', onClick: () => setView('chat') }].map((it, i) => {
+            const Icon = it.icon;
+            return <button key={i} onClick={it.onClick} className="w-full flex items-center gap-3 p-4 border-b last:border-b-0 border-neutral-100 text-left"><div className="w-9 h-9 rounded-full bg-brand-teal-soft flex items-center justify-center"><Icon className="w-4 h-4 brand-teal" /></div><div className="flex-1"><div className="text-sm font-medium">{it.label}</div><div className="text-xs text-neutral-400">{it.sub}</div></div><ChevronRight className="w-4 h-4 text-neutral-400" /></button>;
+          })}
+        </div>
+      </div>
+      <div className="px-5 py-3 space-y-2">
+        <button onClick={onSignOut} className="w-full bg-white border border-neutral-200 rounded-2xl p-4 flex items-center gap-3"><div className="w-9 h-9 rounded-full bg-red-50 flex items-center justify-center"><LogOut className="w-4 h-4 text-red-500" /></div><span className="flex-1 text-sm font-medium text-left text-red-600">Sign out</span></button>
+        <button onClick={() => setView('staff-gate')} className="w-full bg-white border border-neutral-200 rounded-2xl p-4 flex items-center gap-3"><div className="w-9 h-9 rounded-full bg-neutral-100 flex items-center justify-center"><Lock className="w-4 h-4 text-neutral-600" /></div><span className="flex-1 text-sm font-medium text-left">Staff sign in</span><ChevronRight className="w-4 h-4 text-neutral-400" /></button>
+      </div>
+      <div className="text-center py-6 text-xs text-neutral-400">Uchis Beauty Salon</div>
     </div>
   );
 }
@@ -1301,6 +1408,158 @@ function AccountantPortal({ products, bookings, orders, services, settings, exit
         </div>
       </div>
     </div>
+  );
+}
+
+/* =============== ORDERS SCREEN (customer) =============== */
+function OrdersScreen({ orders, customerId, setView }) {
+  const myOrders = customerId ? [...orders].reverse().filter(o => o.customerId === customerId) : [];
+  return (
+    <div>
+      <div className="sticky top-0 bg-white z-20 border-b border-neutral-100 px-5 pt-6 pb-4 flex items-center gap-3">
+        <button onClick={() => setView('profile')} className="w-10 h-10 rounded-full bg-neutral-100 flex items-center justify-center"><ArrowLeft className="w-5 h-5" /></button>
+        <h1 className="font-display text-xl font-bold">My orders</h1>
+      </div>
+      <div className="px-5 py-4 space-y-3">
+        {myOrders.length === 0 && (
+          <div className="text-center py-16"><ShoppingBag className="w-16 h-16 text-neutral-200 mx-auto mb-3" /><div className="font-semibold mb-1">No orders yet</div><p className="text-sm text-neutral-500 mb-4">Your orders will appear here once you shop</p><button onClick={() => setView('shop')} className="bg-brand-black text-white px-6 py-3 rounded-full text-sm font-semibold">Shop now</button></div>
+        )}
+        {myOrders.map(o => (
+          <div key={o.id} className="bg-white border border-neutral-200 rounded-2xl p-4">
+            <div className="flex items-start justify-between mb-2">
+              <div><div className="text-xs text-neutral-500">{new Date(o.date).toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' })}</div><div className="font-semibold text-sm mt-0.5">{o.items.length} item{o.items.length > 1 ? 's' : ''} • {o.fulfill}</div></div>
+              <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${STAGE_COLOR[o.stage]}`}>{STAGE_LABEL[o.stage]}</span>
+            </div>
+            <div className="text-xs text-neutral-500 mb-2 line-clamp-1">{o.items.map(i => `${i.qty}× ${i.name}`).join(', ')}</div>
+            <div className="flex items-center justify-between border-t border-neutral-100 pt-2">
+              <div className="font-bold text-sm">₦{n(o.total)}</div>
+              <div className="flex items-center gap-2">
+                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${o.paid ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>{o.paid ? 'PAID' : 'UNPAID'}</span>
+                <span className="text-xs text-neutral-400">#{o.id.slice(-6)}</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* =============== AUTH MODAL (customer sign up / sign in) =============== */
+function AuthModal({ initialTab, onClose, onSuccess }) {
+  const [tab, setTab] = useState(initialTab || 'signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [showPwd, setShowPwd] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
+  const reset = () => { setErr(''); setSuccessMsg(''); };
+
+  const signIn = async (e) => {
+    e?.preventDefault();
+    if (!email.trim() || !password) return;
+    setBusy(true); reset();
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (error) throw error;
+      const { data: staffProf } = await supabase.from('profiles').select('role').eq('id', data.user.id).maybeSingle();
+      if (staffProf?.role) { await supabase.auth.signOut(); throw new Error('This is a staff account. Use the Staff sign-in option instead.'); }
+      const { data: cp } = await supabase.from('customer_profiles').select('*').eq('id', data.user.id).maybeSingle();
+      onSuccess(data.user, cp);
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+
+  const signUp = async (e) => {
+    e?.preventDefault();
+    if (!email.trim() || !password || !name.trim()) return;
+    if (password.length < 6) { setErr('Password must be at least 6 characters'); return; }
+    setBusy(true); reset();
+    try {
+      const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { name, phone } } });
+      if (error) throw error;
+      if (data.user) {
+        await supabase.from('customer_profiles').upsert({ id: data.user.id, name: name.trim(), phone: phone.trim(), email: email.trim(), created_at: new Date().toISOString() }, { onConflict: 'id' });
+        if (data.session) {
+          const { data: cp } = await supabase.from('customer_profiles').select('*').eq('id', data.user.id).maybeSingle();
+          onSuccess(data.user, cp);
+        } else {
+          setSuccessMsg('Account created! Check your email to confirm, then sign in.');
+        }
+      }
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+
+  const pwdField = (ac) => (
+    <div className="relative">
+      <input type={showPwd ? 'text' : 'password'} value={password} onChange={e => { setPassword(e.target.value); reset(); }} placeholder={ac === 'new-password' ? 'Password (min. 6 chars)' : 'Password'} autoComplete={ac} className="w-full bg-neutral-50 border-2 border-neutral-200 rounded-2xl px-4 py-4 text-sm pr-12" />
+      <button type="button" onClick={() => setShowPwd(v => !v)} className="absolute right-4 top-1/2 -translate-y-1/2 text-neutral-400">{showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}</button>
+    </div>
+  );
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="flex gap-2 mb-5">
+        {['signin', 'signup'].map(t => (
+          <button key={t} onClick={() => { setTab(t); reset(); }} className={`flex-1 py-2.5 rounded-full text-sm font-semibold transition ${tab === t ? 'bg-brand-black text-white' : 'bg-neutral-100 text-neutral-600'}`}>
+            {t === 'signin' ? 'Sign in' : 'Create account'}
+          </button>
+        ))}
+      </div>
+      {successMsg ? (
+        <div className="text-center py-4">
+          <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4"><Check className="w-8 h-8 text-green-600" /></div>
+          <p className="text-sm text-neutral-600 mb-4">{successMsg}</p>
+          <button onClick={() => { setSuccessMsg(''); setTab('signin'); }} className="text-sm brand-teal font-semibold">Go to sign in →</button>
+        </div>
+      ) : tab === 'signin' ? (
+        <form onSubmit={signIn} className="space-y-3">
+          <input type="email" value={email} onChange={e => { setEmail(e.target.value); reset(); }} placeholder="Email address" autoComplete="email" className="w-full bg-neutral-50 border-2 border-neutral-200 rounded-2xl px-4 py-4 text-sm" />
+          {pwdField('current-password')}
+          {err && <div className="bg-red-50 border border-red-200 rounded-2xl px-4 py-3 text-sm text-red-700">{err}</div>}
+          <button type="submit" disabled={busy || !email.trim() || !password} className="w-full bg-brand-teal text-white rounded-full py-4 font-semibold disabled:opacity-50">{busy ? 'Signing in…' : 'Sign in'}</button>
+        </form>
+      ) : (
+        <form onSubmit={signUp} className="space-y-3">
+          <input type="text" value={name} onChange={e => { setName(e.target.value); reset(); }} placeholder="Full name" autoComplete="name" className="w-full bg-neutral-50 border-2 border-neutral-200 rounded-2xl px-4 py-4 text-sm" />
+          <input type="tel" value={phone} onChange={e => { setPhone(e.target.value); reset(); }} placeholder="Phone number" autoComplete="tel" className="w-full bg-neutral-50 border-2 border-neutral-200 rounded-2xl px-4 py-4 text-sm" />
+          <input type="email" value={email} onChange={e => { setEmail(e.target.value); reset(); }} placeholder="Email address" autoComplete="email" className="w-full bg-neutral-50 border-2 border-neutral-200 rounded-2xl px-4 py-4 text-sm" />
+          {pwdField('new-password')}
+          {err && <div className="bg-red-50 border border-red-200 rounded-2xl px-4 py-3 text-sm text-red-700">{err}</div>}
+          <button type="submit" disabled={busy || !email.trim() || !password || !name.trim()} className="w-full bg-brand-teal text-white rounded-full py-4 font-semibold disabled:opacity-50">{busy ? 'Creating account…' : 'Create account'}</button>
+          <p className="text-[11px] text-neutral-400 text-center">By signing up you agree to our terms of service</p>
+        </form>
+      )}
+    </Modal>
+  );
+}
+
+/* =============== PAYSTACK PAYMENT BUTTON =============== */
+function PaystackButton({ amount, email, name, phone, orderId, label, disabled, onSuccess, onClose: onCloseProp, className }) {
+  const key = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
+  const pay = () => {
+    if (!customer_validate()) return;
+    if (!window.PaystackPop) { alert('Payment module not loaded yet — please wait a moment and try again.'); return; }
+    if (!key) { alert('Online payment not configured. Please pay at the salon or select "Cash on delivery".'); return; }
+    const handler = window.PaystackPop.setup({
+      key,
+      email: email || 'guest@uchisbeauty.com',
+      amount: Math.round(amount) * 100,
+      currency: 'NGN',
+      ref: orderId || ('ub_' + Date.now()),
+      metadata: { custom_fields: [{ display_name: 'Customer', variable_name: 'customer_name', value: name || '' }, { display_name: 'Phone', variable_name: 'phone', value: phone || '' }] },
+      callback: (res) => onSuccess?.(res),
+      onClose: () => onCloseProp?.(),
+    });
+    handler.openIframe();
+  };
+  function customer_validate() { return true; }
+  return (
+    <button onClick={pay} disabled={disabled} className={className || 'w-full bg-brand-teal text-white rounded-full py-4 font-semibold disabled:opacity-50 flex items-center justify-center gap-2'}>
+      <CreditCard className="w-4 h-4" />{label || `Pay ₦${n(amount)}`}
+    </button>
   );
 }
 
